@@ -28,23 +28,37 @@ DIAS_ES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Dom
 
 
 def cargar_perfil():
-    with open(PERFIL_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(PERFIL_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("⚠️  No se encontró perfil.json. Ejecuta primero styleagent.py para crear tu perfil.")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print("⚠️  El archivo perfil.json está corrupto. Ejecuta styleagent.py para rehacerlo.")
+        sys.exit(1)
 
 
 def autenticar_google():
     creds = None
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
-    return creds
+    try:
+        if os.path.exists("token.json"):
+            creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                if not os.path.exists("credentials.json"):
+                    print("⚠️  No se encontró credentials.json. Descárgalo desde Google Cloud Console.")
+                    sys.exit(1)
+                flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+                creds = flow.run_local_server(port=0)
+            with open("token.json", "w") as token:
+                token.write(creds.to_json())
+        return creds
+    except Exception as e:
+        print(f"⚠️  Error autenticando con Google: {e}")
+        sys.exit(1)
 
 
 def leer_calendario_semana(creds):
@@ -75,7 +89,7 @@ def leer_calendario_semana(creds):
                 eventos_por_dia[DIAS_ES[idx_dia]].append(titulo)
 
     except Exception as e:
-        print(f"⚠️  Error leyendo calendario: {e}")
+        print(f"⚠️  Error leyendo calendario: {e}. Se generarán looks genéricos.")
 
     return eventos_por_dia, lunes
 
@@ -83,10 +97,11 @@ def leer_calendario_semana(creds):
 def generar_look(dia, contexto, perfil, tendencias, looks_anteriores=""):
     evitar = f"\nPrendas ya usadas esta semana, NO repetir: {looks_anteriores}" if looks_anteriores else ""
 
-    respuesta = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=220,
-        system=f"""StyleAgent. Moda personal. Sin asteriscos, sin markdown, texto plano.
+    try:
+        respuesta = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=220,
+            system=f"""StyleAgent. Moda personal. Sin asteriscos, sin markdown, texto plano.
 Perfil: estilo {perfil['estilo']}, colores {perfil['colores']}, evita {perfil['evitar']}, talla {perfil['talla']}.
 No le gusta: {', '.join(perfil.get('feedback_negativo', [])) or 'nada'}.{evitar}
 Responde EXACTAMENTE en este formato sin líneas en blanco entre ellas y sin texto extra:
@@ -95,12 +110,15 @@ Superior: [prenda]
 Inferior: [prenda]
 Zapato: [calzado]
 Accesorio: [accesorio]""",
-        messages=[{
-            "role": "user",
-            "content": f"{dia} — {contexto}. Tendencias PV2026: {tendencias[:300]}"
-        }]
-    )
-    return respuesta.content[0].text.strip()
+            messages=[{
+                "role": "user",
+                "content": f"{dia} — {contexto}. Tendencias PV2026: {tendencias[:300]}"
+            }]
+        )
+        return respuesta.content[0].text.strip()
+    except Exception as e:
+        print(f"⚠️  Error generando look para {dia}: {e}. Usando look de respaldo.")
+        return f"Contexto: {contexto}\nSuperior: Camisa blanca\nInferior: Pantalón negro recto\nZapato: Botín negro\nAccesorio: Bolso tote neutro"
 
 
 def crear_email(perfil, looks_por_dia, eventos_por_dia, lunes_fecha):
@@ -117,12 +135,17 @@ def crear_email(perfil, looks_por_dia, eventos_por_dia, lunes_fecha):
 
 
 def enviar_email(creds, destinatario, asunto, cuerpo):
-    servicio = build("gmail", "v1", credentials=creds)
-    mensaje = MIMEText(cuerpo)
-    mensaje["to"] = destinatario
-    mensaje["subject"] = asunto
-    raw = base64.urlsafe_b64encode(mensaje.as_bytes()).decode()
-    servicio.users().messages().send(userId="me", body={"raw": raw}).execute()
+    try:
+        servicio = build("gmail", "v1", credentials=creds)
+        mensaje = MIMEText(cuerpo)
+        mensaje["to"] = destinatario
+        mensaje["subject"] = asunto
+        raw = base64.urlsafe_b64encode(mensaje.as_bytes()).decode()
+        servicio.users().messages().send(userId="me", body={"raw": raw}).execute()
+        return True
+    except Exception as e:
+        print(f"⚠️  Error enviando email: {e}")
+        return False
 
 
 def main():
@@ -150,8 +173,11 @@ def main():
     try:
         resultados = tavily.search(query="tendencias moda primavera verano 2026", max_results=2)
         tendencias = "\n".join([r["content"][:150] for r in resultados["results"]])
+        if not tendencias.strip():
+            raise ValueError("Sin resultados")
     except Exception:
-        tendencias = "Tendencias PV2026: colores tierra, lino, minimalismo."
+        tendencias = "Tendencias PV2026: colores tierra, lino, minimalismo, azul marino."
+        print("   ⚠️  Usando tendencias de respaldo.")
 
     print("\n👗 Generando looks...")
     looks_por_dia = {}
@@ -164,10 +190,18 @@ def main():
         looks_generados += " | " + looks_por_dia[dia]
         print(f"   ✅ {dia}")
 
-    asunto, cuerpo = crear_email(perfil, looks_por_dia, eventos_por_dia, lunes_fecha)
     tu_email = os.getenv("TU_EMAIL")
-    enviar_email(creds, tu_email, asunto, cuerpo)
-    print(f"\n✅ Email enviado a {tu_email} — semana del {lunes_fecha.strftime('%d/%m')} lista.")
+    if not tu_email:
+        print("⚠️  No se encontró TU_EMAIL en el archivo .env")
+        return
+
+    asunto, cuerpo = crear_email(perfil, looks_por_dia, eventos_por_dia, lunes_fecha)
+    exito = enviar_email(creds, tu_email, asunto, cuerpo)
+
+    if exito:
+        print(f"\n✅ Email enviado a {tu_email} — semana del {lunes_fecha.strftime('%d/%m')} lista.")
+    else:
+        print("\n❌ No se pudo enviar el email. Revisa tu conexión e inténtalo de nuevo.")
 
 
 if __name__ == "__main__":

@@ -414,11 +414,96 @@ Accesorio: [prenda]""",
         st.session_state.messages.append({"role": "user", "content": pregunta})
 
         frases_negativas = ["no me gusta", "nunca más", "no quiero", "no me pongas", "jamás", "quita"]
+        frases_cambio_look = ["prefiero", "mejor con", "en vez de", "cambia", "ponme", "cámbialo", "quiero cambiar"]
         frases_positivas = ["me encanta", "me ha gustado", "me gusta mucho", "perfecto", "genial"]
         es_negativo = any(f in pregunta.lower() for f in frases_negativas)
+        es_cambio = any(f in pregunta.lower() for f in frases_cambio_look)
         es_positivo = any(f in pregunta.lower() for f in frases_positivas)
 
-        if es_negativo:
+        if es_cambio:
+            # Solo modifica el look actual, no guarda como feedback permanente
+            with st.spinner("Buscando tendencias..."):
+                try:
+                    resultados = tavily.search(query=pregunta + " moda tendencias 2026", max_results=3)
+                    contexto = "\n".join([r["content"] for r in resultados["results"]])
+                    if not contexto.strip():
+                        contexto = "No se encontraron tendencias actualizadas. Responde basándote en conocimiento general de moda PV2026."
+                except Exception:
+                    contexto = "Búsqueda no disponible. Responde basándote en conocimiento general de moda PV2026."
+            
+            evitar_texto = perfil.get("evitar", "")
+            system_prompt = f"""Eres StyleAgent, asistente de moda de {perfil['nombre']}.
+PERFIL: Estilo: {perfil['estilo']}, Colores: {perfil['colores']}, Evita: {evitar_texto}, Talla: {perfil['talla']}
+REGLA: Solo texto plano. Sin **, sin #. Máximo 5 líneas.
+El usuario quiere modificar el look anterior. Genera el look completo corregido con el cambio que pide.
+Formato exacto:
+Contexto: [ocasión]
+Superior: [prenda]
+Inferior: [prenda]
+Zapato: [prenda]
+Accesorio: [prenda]"""
+
+            historial = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
+            historial[-1]["content"] = f"Información:\n{contexto}\n\nCambio solicitado: {pregunta}"
+
+            try:
+                respuesta_api = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=500,
+                    system=system_prompt,
+                    messages=historial
+                )
+                respuesta = respuesta_api.content[0].text
+            except Exception as e:
+                respuesta = "Ha habido un problema al conectar con el agente. Inténtalo de nuevo en unos segundos."
+                st.error(f"Error: {e}")
+
+            with st.chat_message("assistant", avatar="👠"):
+                st.write(respuesta)
+                es_look = all(p in respuesta.lower() for p in ["superior:", "inferior:", "zapato:"])
+                if es_look:
+                    if st.button("🤍 Guardar look", key="fav_cambio"):
+                        guardar_favorito(respuesta, date.today().strftime("%d %b %Y"))
+                        st.success("Look guardado en favoritos ✓")
+                        st.rerun()
+                    st.divider()
+                    lineas_look = [l for l in respuesta.split("\n") if any(p in l.lower() for p in ["superior:", "inferior:", "zapato:"])]
+                    prendas = " ".join([l.split(":")[-1].strip() for l in lineas_look[:2]])
+                    query_pinterest = (prendas + " outfit minimal 2026").replace(" ", "+").replace(",", "")
+                    url_pinterest = f"https://pinterest.com/search/pins/?q={query_pinterest}"
+                    st.markdown(f'<a href="{url_pinterest}" target="_blank" style="display:inline-block; padding:0.4rem 1rem; border:1px solid #d0d9e8; border-radius:4px; font-size:0.72rem; font-weight:500; letter-spacing:0.1em; text-transform:uppercase; color:#1b2a4a; text-decoration:none;">🔍 Ver inspiración en Pinterest</a>', unsafe_allow_html=True)
+
+            st.session_state.messages.append({"role": "assistant", "content": respuesta})
+            
+            # Detectar si el usuario pide ver Pinterest
+        pide_pinterest = any(f in pregunta.lower() for f in ["pinterest", "verlo en pinterest", "ver en pinterest", "inspiración", "inspiracion"])
+        
+        if pide_pinterest:
+            # Buscar el último look en el historial
+            ultimo_look = None
+            for msg in reversed(st.session_state.messages):
+                if msg["role"] == "assistant" and all(p in msg["content"].lower() for p in ["superior:", "inferior:", "zapato:"]):
+                    ultimo_look = msg["content"]
+                    break
+            
+            if ultimo_look:
+                lineas_look = [l for l in ultimo_look.split("\n") if any(p in l.lower() for p in ["superior:", "inferior:", "zapato:"])]
+                prendas = " ".join([l.split(":")[-1].strip() for l in lineas_look[:2]])
+                query_pinterest = (prendas + " outfit minimal 2026").replace(" ", "+").replace(",", "")
+                url_pinterest = f"https://pinterest.com/search/pins/?q={query_pinterest}"
+                respuesta = "Aquí tienes la búsqueda en Pinterest con las prendas de tu look 👇"
+                with st.chat_message("assistant", avatar="👠"):
+                    st.write(respuesta)
+                    st.markdown(f'<a href="{url_pinterest}" target="_blank" style="display:inline-block; padding:0.4rem 1rem; border:1px solid #d0d9e8; border-radius:4px; font-size:0.72rem; font-weight:500; letter-spacing:0.1em; text-transform:uppercase; color:#1b2a4a; text-decoration:none;">🔍 Ver inspiración en Pinterest</a>', unsafe_allow_html=True)
+                st.session_state.messages.append({"role": "assistant", "content": respuesta})
+            else:
+                with st.chat_message("assistant", avatar="👠"):
+                    st.write("Primero pídeme un look y luego te muestro la inspiración en Pinterest.")
+                st.session_state.messages.append({"role": "assistant", "content": "Primero pídeme un look y luego te muestro la inspiración en Pinterest."})
+            st.stop()
+            
+
+        elif es_negativo:
             perfil["feedback_negativo"].append(pregunta)
             guardar_perfil(perfil)
             respuesta = "Entendido, no te lo sugeriré más."
@@ -483,15 +568,17 @@ Accesorio: [prenda]"""
             
             es_pregunta = respuesta.strip().endswith("?")
             urls_imagenes = []
-            if not es_pregunta and any(palabra in respuesta.lower() for palabra in ["superior:", "inferior:", "zapato:", "accesorio:"]):
-                contexto_look = perfil.get("estilo", "") + " " + perfil.get("colores", "")
-                imagenes = tavily.search(
-                    query=f"outfit {contexto_look} moda oficina 2026 minimal",
-                    max_results=3,
-                    include_images=True
-                )
-                urls_imagenes = imagenes.get("images", [])[:2]
-
+            try:
+                if not es_pregunta and any(palabra in respuesta.lower() for palabra in ["superior:", "inferior:", "zapato:", "accesorio:"]):
+                    contexto_look = perfil.get("estilo", "") + " " + perfil.get("colores", "")
+                    imagenes = tavily.search(
+                        query=f"outfit {contexto_look} moda oficina 2026 minimal",
+                        max_results=3,
+                        include_images=True
+                    )
+                    urls_imagenes = imagenes.get("images", [])[:2]
+            except Exception:
+                urls_imagenes = []
             with st.chat_message("assistant", avatar="👠"):
                 st.write(respuesta)
                 es_look = all(p in respuesta.lower() for p in ["superior:", "inferior:", "zapato:"])
@@ -503,11 +590,10 @@ Accesorio: [prenda]"""
                 if es_look:
                     st.divider()
                     # Construir query de Pinterest basada en el look
-                    query_pinterest = " ".join([
-                        perfil.get("estilo", ""),
-                        perfil.get("colores", ""),
-                        "outfit look 2026 minimal"
-                    ]).replace(" ", "+").replace(",", "")
+                    # Extraer prendas del look para una búsqueda más precisa
+                    lineas_look = [l for l in respuesta.split("\n") if any(p in l.lower() for p in ["superior:", "inferior:", "zapato:"])]
+                    prendas = " ".join([l.split(":")[-1].strip() for l in lineas_look[:2]])
+                    query_pinterest = (prendas + " outfit minimal 2026").replace(" ", "+").replace(",", "")
                     url_pinterest = f"https://pinterest.com/search/pins/?q={query_pinterest}"
                     st.markdown(f'<a href="{url_pinterest}" target="_blank" style="display:inline-block; padding:0.4rem 1rem; border:1px solid #d0d9e8; border-radius:4px; font-size:0.72rem; font-weight:500; letter-spacing:0.1em; text-transform:uppercase; color:#1b2a4a; text-decoration:none;">🔍 Ver inspiración en Pinterest</a>', unsafe_allow_html=True)
 

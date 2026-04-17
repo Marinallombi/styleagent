@@ -32,7 +32,7 @@ CONTEXTO_YA_DADO = [
     "reunión", "reunion", "presentación", "presentacion", "defensa", "normal", "casual",
     "especial", "importante", "entrevista", "primera cita", "cita", "fiesta", "cena",
     "almuerzo", "formal", "informal", "semiformal", "clase", "examen", "corporativo",
-    "creativo", "startup", "invitada", "dama de honor",
+    "creativo",
 ]
 
 # Keywords que justifican llamar a Tavily (no buscar para preguntas de feedback o charla)
@@ -75,7 +75,7 @@ def construir_system_prompt(perfil):
     pos = ', '.join(perfil.get('feedback_positivo', [])) or 'nada anotado aún'
     return f"""Eres StyleAgent, asistente experto en moda y estilo personal femenino.
 
-PERFIL DE USUARIA:
+PERFIL DE USUARIO:
 - Nombre: {perfil['nombre']}
 - Estilo personal: {perfil['estilo']}
 - Colores favoritos: {perfil['colores']}
