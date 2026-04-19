@@ -405,31 +405,36 @@ Accesorio: [prenda]""",
                 if es_look:
                     if st.button("🤍 Guardar look", key=f"fav_{i}"):
                         guardar_favorito(msg["content"], date.today().strftime("%d %b %Y"))
-                        st.success("Look guardado en favoritos ✓")
-                        st.rerun()
+                        st.toast("Look guardado en favoritos 🤍", icon="✓")
 
     if pregunta := st.chat_input("Pregúntame sobre tendencias, looks o estilo..."):
         with st.chat_message("user", avatar="👤"):
             st.write(pregunta)
         st.session_state.messages.append({"role": "user", "content": pregunta})
 
-        frases_negativas = ["no me gusta", "nunca más", "no quiero", "no me pongas", "jamás", "quita"]
-        frases_cambio_look = ["prefiero", "mejor con", "en vez de", "cambia", "ponme", "cámbialo", "quiero cambiar"]
-        frases_positivas = ["me encanta", "me ha gustado", "me gusta mucho", "perfecto", "genial"]
-        es_negativo = any(f in pregunta.lower() for f in frases_negativas)
-        es_cambio = any(f in pregunta.lower() for f in frases_cambio_look)
-        es_positivo = any(f in pregunta.lower() for f in frases_positivas)
+       # Feedback permanente — se guarda en perfil.json
+        frases_negativas = ["nunca más", "jamás", "nunca me pongas", "no me pongas nunca", "odio"]
+        frases_positivas = ["me encanta", "me ha gustado mucho", "me gusta mucho", "quiero repetir"]
 
-        if es_cambio:
+        # Cambio puntual — solo modifica este look, no se guarda
+        frases_cambio = ["prefiero", "mejor con", "en vez de", "cambia", "ponme", "cámbialo",
+                        "no quiero el", "no me gusta el", "no me gusta la", "quita el", "quita la",
+                        "sin tacón", "sin flecos", "sin cinturón"]
+
+        es_negativo = any(f in pregunta.lower() for f in frases_negativas)
+        es_positivo = any(f in pregunta.lower() for f in frases_positivas)
+        es_cambio = any(f in pregunta.lower() for f in frases_cambio)
+
+        if es_cambio and not es_negativo:
             # Solo modifica el look actual, no guarda como feedback permanente
-            with st.spinner("Buscando tendencias..."):
+            with st.spinner("Ajustando el look..."):
                 try:
                     resultados = tavily.search(query=pregunta + " moda tendencias 2026", max_results=3)
                     contexto = "\n".join([r["content"] for r in resultados["results"]])
                     if not contexto.strip():
                         contexto = "No se encontraron tendencias actualizadas. Responde basándote en conocimiento general de moda PV2026."
                 except Exception:
-                    contexto = "Búsqueda no disponible. Responde basándote en conocimiento general de moda PV2026."
+                    contexto = "Búsqueda no disponible."
             
             evitar_texto = perfil.get("evitar", "")
             system_prompt = f"""Eres StyleAgent, asistente de moda de {perfil['nombre']}.
@@ -464,8 +469,7 @@ Accesorio: [prenda]"""
                 if es_look:
                     if st.button("🤍 Guardar look", key="fav_cambio"):
                         guardar_favorito(respuesta, date.today().strftime("%d %b %Y"))
-                        st.success("Look guardado en favoritos ✓")
-                        st.rerun()
+                        st.toast("Look guardado en favoritos 🤍", icon="✓")
                     st.divider()
                     lineas_look = [l for l in respuesta.split("\n") if any(p in l.lower() for p in ["superior:", "inferior:", "zapato:"])]
                     prendas = " ".join([l.split(":")[-1].strip() for l in lineas_look[:2]])
@@ -585,8 +589,7 @@ Accesorio: [prenda]"""
                 if es_look:
                     if st.button("🤍 Guardar look", key="fav_new"):
                         guardar_favorito(respuesta, date.today().strftime("%d %b %Y"))
-                        st.success("Look guardado en favoritos ✓")
-                        st.rerun()
+                        st.toast("Look guardado en favoritos 🤍", icon="✓")
                 if es_look:
                     st.divider()
                     # Construir query de Pinterest basada en el look
