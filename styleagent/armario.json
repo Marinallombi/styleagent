@@ -1,0 +1,46 @@
+[
+  {
+    "tipo": "pantalón",
+    "color": "crema",
+    "corte": "palazzo",
+    "tejido": "denim",
+    "estilo": "elegante",
+    "ocasiones": "oficina, salidas, eventos",
+    "id": "prenda_fcfc8a80",
+    "imagen": "armario\\prenda_fcfc8a80.jpeg",
+    "fecha": "23 Apr 2026"
+  },
+  {
+    "tipo": "pantalón",
+    "color": "azul marino",
+    "corte": "ajustado",
+    "tejido": "denim",
+    "estilo": "casual",
+    "ocasiones": "casual, salidas, oficina",
+    "id": "prenda_2f0221c6",
+    "imagen": "armario\\prenda_2f0221c6.jpeg",
+    "fecha": "23 Apr 2026"
+  },
+  {
+    "tipo": "falda",
+    "color": "marrón ocre",
+    "corte": "midi",
+    "tejido": "terciopelo",
+    "estilo": "boho",
+    "ocasiones": "casual, salidas, eventos informales",
+    "id": "prenda_4ad52f71",
+    "imagen": "armario\\prenda_4ad52f71.jpeg",
+    "fecha": "23 Apr 2026"
+  },
+  {
+    "tipo": "falda",
+    "color": "ocre",
+    "corte": "midi",
+    "tejido": "terciopelo",
+    "estilo": "boho",
+    "ocasiones": "casual, salidas, eventos",
+    "id": "prenda_c0a01e42",
+    "imagen": "armario\\prenda_c0a01e42.jpeg",
+    "fecha": "23 Apr 2026"
+  }
+]

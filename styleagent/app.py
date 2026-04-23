@@ -5,12 +5,17 @@ from dotenv import load_dotenv
 import anthropic
 from tavily import TavilyClient
 from datetime import date
+import base64
+import uuid
 
 load_dotenv()
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 PERFIL_PATH = "perfil.json"
 FAVORITOS_PATH = "favoritos.json"
+ARMARIO_PATH = "armario.json"
+ARMARIO_DIR = "armario"
+os.makedirs(ARMARIO_DIR, exist_ok=True)
 
 st.set_page_config(page_title="StyleAgent", page_icon="🤍", layout="centered")
 
@@ -159,8 +164,10 @@ section[data-testid="stSidebar"] {
     text-transform: uppercase !important;
     color: #8a9bb5 !important;
 }
-img { border-radius: 6px !important; }
+img { border-radius: 0 !important; }
 hr { border-color: #e8edf5 !important; }
+.prenda-card .overlay { opacity: 0; transition: opacity 0.2s; }
+.prenda-card:hover .overlay { opacity: 1; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -191,6 +198,72 @@ def borrar_favorito(index):
     favoritos.pop(index)
     with open(FAVORITOS_PATH, "w", encoding="utf-8") as f:
         json.dump(favoritos, f, ensure_ascii=False, indent=2)
+        
+        
+def cargar_armario():
+    if os.path.exists(ARMARIO_PATH):
+        with open(ARMARIO_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+def guardar_prenda(datos, imagen_bytes, extension):
+    prenda_id = f"prenda_{uuid.uuid4().hex[:8]}"
+    ruta_img = os.path.join(ARMARIO_DIR, f"{prenda_id}.{extension}")
+    with open(ruta_img, "wb") as f:
+        f.write(imagen_bytes)
+    datos["id"] = prenda_id
+    datos["imagen"] = ruta_img
+    datos["fecha"] = date.today().strftime("%d %b %Y")
+    armario = cargar_armario()
+    armario.append(datos)
+    with open(ARMARIO_PATH, "w", encoding="utf-8") as f:
+        json.dump(armario, f, ensure_ascii=False, indent=2)
+    return datos
+
+def borrar_prenda(index):
+    armario = cargar_armario()
+    prenda = armario[index]
+    if os.path.exists(prenda.get("imagen", "")):
+        os.remove(prenda["imagen"])
+    armario.pop(index)
+    with open(ARMARIO_PATH, "w", encoding="utf-8") as f:
+        json.dump(armario, f, ensure_ascii=False, indent=2)
+
+def analizar_prenda_con_claude(imagen_bytes, media_type):
+    imagen_b64 = base64.standard_b64encode(imagen_bytes).decode("utf-8")
+    respuesta = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": imagen_b64
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": """Analiza esta prenda de ropa. Devuelve SOLO un JSON válido, sin markdown ni texto extra:
+{"tipo": "...", "color": "...", "corte": "...", "tejido": "...", "estilo": "...", "ocasiones": "..."}
+
+tipo: categoría exacta (pantalón, blusa, vestido, falda, zapato, bolso, chaqueta, etc.)
+color: color principal en español
+corte: silueta (recto, palazzo, ajustado, oversized, midi, etc.)
+tejido: material visible (lino, denim, punto, seda, etc.) o "no determinado"
+estilo: minimalista / clásico / casual / sport / boho / elegante
+ocasiones: ocasiones separadas por comas (oficina, salidas, casual, eventos, etc.)"""
+                }
+            ]
+        }]
+    )
+    texto = respuesta.content[0].text.strip()
+    texto = texto.replace("```json", "").replace("```", "").strip()
+    return texto  
+
 
 perfil = cargar_perfil()
 
@@ -393,26 +466,87 @@ Accesorio: [prenda]""",
     st.markdown(f'<div class="greeting">Hola de nuevo, {perfil["nombre"]}</div>', unsafe_allow_html=True)
     st.divider()
 
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    tab_chat, tab_armario = st.tabs(["💬 Chat", "🧥 Mi Armario"])
 
-    for i, msg in enumerate(st.session_state.messages):
-        avatar = "👠" if msg["role"] == "assistant" else "👤"
-        with st.chat_message(msg["role"], avatar=avatar):
-            st.write(msg["content"])
-            if msg["role"] == "assistant":
-                es_look = all(p in msg["content"].lower() for p in ["superior:", "inferior:", "zapato:"])
-                if es_look:
-                    if st.button("🤍 Guardar look", key=f"fav_{i}"):
-                        guardar_favorito(msg["content"], date.today().strftime("%d %b %Y"))
-                        st.toast("Look guardado en favoritos 🤍", icon="✓")
+    with tab_armario:
+        st.markdown('<p style="font-family: Playfair Display, serif; font-size:1.1rem; font-style:italic; color:#1b2a4a; margin-bottom:0.3rem">Tu armario</p>', unsafe_allow_html=True)
+        st.markdown('<p style="font-size:0.7rem; color:#8a9bb5; letter-spacing:0.1em; text-transform:uppercase; margin-bottom:1.2rem">Sube una foto y StyleAgent la cataloga sola</p>', unsafe_allow_html=True)
+
+        archivo = st.file_uploader("Sube una prenda", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed")
+
+        if archivo:
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.image(archivo, use_container_width=True)
+            with col2:
+                if st.button("✦ Analizar prenda", key="analizar"):
+                    imagen_bytes = archivo.read()
+                    extension = archivo.name.split(".")[-1].lower()
+                    media_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+                    media_type = media_map.get(extension, "image/jpeg")
+                    with st.spinner("Analizando..."):
+                        try:
+                            resultado_raw = analizar_prenda_con_claude(imagen_bytes, media_type)
+                            datos_prenda = json.loads(resultado_raw)
+                            prenda_guardada = guardar_prenda(datos_prenda, imagen_bytes, extension)
+                            st.success("Prenda añadida al armario ✓")
+                            st.markdown(f"""<div class="favorito-card">
+<div class="fav-date">{prenda_guardada['tipo'].upper()} · {prenda_guardada['fecha']}</div>
+Color: {prenda_guardada['color']}<br>
+Corte: {prenda_guardada['corte']}<br>
+Tejido: {prenda_guardada['tejido']}<br>
+Estilo: {prenda_guardada['estilo']}<br>
+Ocasiones: {prenda_guardada['ocasiones']}
+</div>""", unsafe_allow_html=True)
+                        except json.JSONDecodeError:
+                            st.error("No pude leer la respuesta. Inténtalo de nuevo.")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+
+        st.markdown('<div style="height:1.5rem"></div>', unsafe_allow_html=True)
+        armario_actual = cargar_armario()
+        if armario_actual:
+            st.markdown(f'<p style="font-size:0.7rem; color:#8a9bb5; letter-spacing:0.1em; text-transform:uppercase; margin-bottom:1rem">{len(armario_actual)} prendas</p>', unsafe_allow_html=True)
+
+            cols = st.columns(3)
+            for i, prenda in enumerate(armario_actual):
+                with cols[i % 3]:
+                    ruta = prenda.get("imagen", "")
+                    if os.path.exists(ruta):
+                        with open(ruta, "rb") as _f:
+                            _img_bytes = _f.read()
+                        _ext = ruta.split(".")[-1].lower()
+                        _mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}.get(_ext, "image/jpeg")
+                        _img_b64 = base64.standard_b64encode(_img_bytes).decode()
+                        st.markdown(f'<div style="aspect-ratio:1/1;overflow:hidden;border-radius:6px;margin-bottom:0.3rem;"><img src="data:{_mime};base64,{_img_b64}" style="width:100%;height:100%;object-fit:cover;display:block;border-radius:0;"></div>', unsafe_allow_html=True)
+                    if st.button("✕", key=f"del_prenda_{i}"):
+                        borrar_prenda(i)
+                        st.rerun()
+        else:
+            st.markdown('<div style="font-size:0.78rem; color:#8a9bb5; line-height:1.6">Todavía no tienes prendas. Sube tu primera foto arriba.</div>', unsafe_allow_html=True)
+
+    with tab_chat:
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        for i, msg in enumerate(st.session_state.messages):
+            avatar = "👠" if msg["role"] == "assistant" else "👤"
+            with st.chat_message(msg["role"], avatar=avatar):
+                st.write(msg["content"])
+                if msg["role"] == "assistant":
+                    es_look = all(p in msg["content"].lower() for p in ["superior:", "inferior:", "zapato:"])
+                    if es_look:
+                        if st.button("🤍 Guardar look", key=f"fav_{i}"):
+                            guardar_favorito(msg["content"], date.today().strftime("%d %b %Y"))
+                            st.toast("Look guardado en favoritos 🤍", icon="✓")
+                            
 
     if pregunta := st.chat_input("Pregúntame sobre tendencias, looks o estilo..."):
         with st.chat_message("user", avatar="👤"):
             st.write(pregunta)
         st.session_state.messages.append({"role": "user", "content": pregunta})
 
-       # Feedback permanente — se guarda en perfil.json
+        # Feedback permanente — se guarda en perfil.json
         frases_negativas = ["nunca más", "jamás", "nunca me pongas", "no me pongas nunca", "odio"]
         frases_positivas = ["me encanta", "me ha gustado mucho", "me gusta mucho", "quiero repetir"]
 
@@ -435,10 +569,15 @@ Accesorio: [prenda]""",
                         contexto = "No se encontraron tendencias actualizadas. Responde basándote en conocimiento general de moda PV2026."
                 except Exception:
                     contexto = "Búsqueda no disponible."
-            
             evitar_texto = perfil.get("evitar", "")
+            armario_prendas = cargar_armario()
+            contexto_armario = ""
+            if armario_prendas:
+                lista = ", ".join([f"{p['tipo']} {p['color']} ({p['estilo']})" for p in armario_prendas])
+                contexto_armario = f" Armario real: {lista}."
+
             system_prompt = f"""Eres StyleAgent, asistente de moda de {perfil['nombre']}.
-PERFIL: Estilo: {perfil['estilo']}, Colores: {perfil['colores']}, Evita: {evitar_texto}, Talla: {perfil['talla']}
+PERFIL: Estilo: {perfil['estilo']}, Colores: {perfil['colores']}, Evita: {evitar_texto}, Talla: {perfil['talla']}.{contexto_armario}
 REGLA: Solo texto plano. Sin **, sin #. Máximo 5 líneas.
 El usuario quiere modificar el look anterior. Genera el look completo corregido con el cambio que pide.
 Formato exacto:
@@ -470,6 +609,8 @@ Accesorio: [prenda]"""
                     if st.button("🤍 Guardar look", key="fav_cambio"):
                         guardar_favorito(respuesta, date.today().strftime("%d %b %Y"))
                         st.toast("Look guardado en favoritos 🤍", icon="✓")
+                if es_look:
+                  
                     st.divider()
                     lineas_look = [l for l in respuesta.split("\n") if any(p in l.lower() for p in ["superior:", "inferior:", "zapato:"])]
                     prendas = " ".join([l.split(":")[-1].strip() for l in lineas_look[:2]])
@@ -527,10 +668,16 @@ Accesorio: [prenda]"""
             with st.spinner("Buscando tendencias..."):
                 resultados = tavily.search(query=pregunta + " moda tendencias 2026", max_results=3)
                 contexto = "\n".join([r["content"] for r in resultados["results"]])
-               
+
             evitar_texto = perfil.get("evitar", "")
             if perfil.get("feedback_negativo"):
                 evitar_texto += ". NO sugerir: " + "; ".join(perfil["feedback_negativo"])
+
+            armario_prendas = cargar_armario()
+            contexto_armario = ""
+            if armario_prendas:
+                lista = ", ".join([f"{p['tipo']} {p['color']} ({p['estilo']})" for p in armario_prendas])
+                contexto_armario = f"\n- Armario real (prioriza estas prendas): {lista}"
 
             system_prompt = f"""Eres StyleAgent, asistente de moda personal de {perfil['nombre']}.
 
@@ -539,7 +686,7 @@ PERFIL:
 - Colores: {perfil['colores']}
 - Nunca sugerir: {evitar_texto}
 - Contextos: {perfil['contextos']}
-- Talla: {perfil['talla']}
+- Talla: {perfil['talla']}{contexto_armario}
 
 FECHA: Abril 2026. Temporada: Primavera-Verano 2026.
 
@@ -548,6 +695,7 @@ Solo moda y estilo. Máximo 2 líneas. Lenguaje natural y cercano.
 Sin frases motivacionales. Termina siempre en el accesorio.
 LÍMITES:
 - Si el usuario usa slang o abreviaciones de planes (vinitos, cañas, tapas, gym, curro, clase...) entiéndelos como contextos de moda y genera el look adecuado sin preguntar qué significan.
+- Si el usuario dice "este pantalón", "esta prenda", "esto", "el que acabo de subir" ,"el que he guardado", "de mi armario" o similar, consulta el armario real y usa la prenda más reciente que coincida. No preguntes cuál es.
 
 CUANDO TE PIDAN UN LOOK:
 - Si mencionaron la ocasión pero no el tipo de día, pregunta UNA VEZ: ¿día normal o tienes algo especial?
@@ -558,7 +706,6 @@ Superior: [prenda]
 Inferior: [prenda]
 Zapato: [prenda]
 Accesorio: [prenda]"""
-
             historial = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
             historial[-1]["content"] = f"Información de internet:\n{contexto}\n\nPregunta: {pregunta}"
 
@@ -590,6 +737,8 @@ Accesorio: [prenda]"""
                     if st.button("🤍 Guardar look", key="fav_new"):
                         guardar_favorito(respuesta, date.today().strftime("%d %b %Y"))
                         st.toast("Look guardado en favoritos 🤍", icon="✓")
+                  
+                    st.divider()
                 if es_look:
                     st.divider()
                     # Construir query de Pinterest basada en el look
